@@ -16,6 +16,8 @@ export default function Page() {
   const [loadingText, setLoadingText] = useState<string>("Processing... please wait");
   const [lastRun, setLastRun] = useState<Date | null>(null);
 
+  const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number; name: string } | null>(null);
+
   // ---------------------------
   // 🔹 Run Optimization Handler
   // ---------------------------
@@ -73,8 +75,7 @@ export default function Page() {
       {/* Sidebar */}
       <aside className="w-80 xl:w-96 p-4 border-r bg-white flex flex-col overflow-y-auto">
         <h2 className="text-lg font-semibold mb-3">Darkstore Optimizer</h2>
-        <SearchBar onSelect={(pt) => console.log("Search selected:", pt)} />
-
+        <SearchBar onSelect={(pt) => setSelectedLocation(pt)} />
         <button
           onClick={handleRunOptimization}
           disabled={loading}
@@ -181,7 +182,7 @@ export default function Page() {
 
       {/* Map Section */}
       <main className="flex-1 h-full">
-        <MapView geojson={geoData} />
+        <MapView geojson={geoData} selectedLocation={selectedLocation} />
       </main>
     </div>
   );

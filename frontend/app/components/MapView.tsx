@@ -6,14 +6,17 @@ import "leaflet.heat";
 
 interface MapViewProps {
   geojson: any;
+  selectedLocation?: { lat: number; lng: number; name: string } | null;
 }
 
-export default function MapView({ geojson }: MapViewProps) {
+export default function MapView({ geojson, selectedLocation }: MapViewProps) {
   const mapRef = useRef<L.Map | null>(null);
   const mapId = "darkstore-map";
 
+  // -----------------------
+  // Initialize map
+  // -----------------------
   useEffect(() => {
-    // ✅ Initialize map only once
     if (!mapRef.current) {
       const map = L.map(mapId, {
         center: [28.6139, 77.2167], // Delhi center
@@ -22,36 +25,37 @@ export default function MapView({ geojson }: MapViewProps) {
       });
 
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: '&copy; <a href="https://osm.org">OpenStreetMap</a> contributors',
+        attribution:
+          '&copy; <a href="https://osm.org">OpenStreetMap</a> contributors',
         maxZoom: 19,
       }).addTo(map);
 
       mapRef.current = map;
     }
 
-    // ✅ Cleanup on unmount
     return () => {
       mapRef.current?.remove();
       mapRef.current = null;
     };
   }, []);
 
+  // -----------------------
+  // Handle GeoJSON updates
+  // -----------------------
   useEffect(() => {
     if (!geojson || !mapRef.current) return;
     const map = mapRef.current;
 
-    // Remove all non-tile layers
+    // Clear previous non-tile layers
     map.eachLayer((layer: any) => {
-      if (!(layer instanceof L.TileLayer)) {
-        map.removeLayer(layer);
-      }
+      if (!(layer instanceof L.TileLayer)) map.removeLayer(layer);
     });
 
-    // ✅ Add GeoJSON store points
-    const layer = L.geoJSON(geojson, {
+    // ✅ Add store markers
+    const storeLayer = L.geoJSON(geojson, {
       pointToLayer: (feature, latlng) => {
         const open = feature.properties.open;
-        const color = open ? "#22c55e" : "#ef4444"; // green=open, red=closed
+        const color = open ? "#22c55e" : "#ef4444"; // green or red
         const icon = L.divIcon({
           className: "",
           html: `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26">
@@ -64,39 +68,51 @@ export default function MapView({ geojson }: MapViewProps) {
       },
       onEachFeature: (feature, layer) => {
         const props = feature.properties;
-        const popup = `
+        layer.bindPopup(`
           <strong>Store ID:</strong> ${props.id}<br/>
           <strong>Status:</strong> ${props.open ? "🟢 Open" : "🔴 Closed"}<br/>
           <strong>Fixed Cost:</strong> ${props.fixed_cost.toFixed(2)}
-        `;
-        layer.bindPopup(popup);
+        `);
       },
     }).addTo(map);
 
-    // ✅ Add Heat Layer
+    // ✅ Add heat layer (open stores only)
     const heatPoints = geojson.features
       .filter((f: any) => f.properties.open)
       .map((f: any) => [
         f.geometry.coordinates[1],
         f.geometry.coordinates[0],
-        Math.min(f.properties.fixed_cost / 2, 1.0), // scale intensity
+        Math.min(f.properties.fixed_cost / 2, 1.0),
       ]);
 
     if (heatPoints.length > 0) {
       L.heatLayer(heatPoints, { radius: 25, blur: 15, maxZoom: 17 }).addTo(map);
     }
 
-    // Fit map to layer bounds
-    const bounds = layer.getBounds();
+    // Fit to all markers
+    const bounds = storeLayer.getBounds();
     if (bounds.isValid()) map.fitBounds(bounds, { padding: [50, 50] });
   }, [geojson]);
 
-  return (
-    <div
-        id={mapId}
-        className="w-full h-full"
-    />
-    );
+  // -----------------------
+  // Handle Location Search (zoom + marker)
+  // -----------------------
+  useEffect(() => {
+    if (!selectedLocation || !mapRef.current) return;
+    const map = mapRef.current;
 
-  
+    const { lat, lng, name } = selectedLocation;
+    const marker = L.marker([lat, lng]).addTo(map);
+    marker.bindPopup(`<strong>${name}</strong>`).openPopup();
+
+    // Smooth zoom + pan
+    map.flyTo([lat, lng], 14, { animate: true, duration: 1.5 });
+
+    // Cleanup (remove marker if new one selected)
+    return () => {
+      map.removeLayer(marker);
+    };
+  }, [selectedLocation]);
+
+  return <div id={mapId} className="w-full h-full" />;
 }

@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pydantic
+pandas
+numpy
+scikit-learn
+networkx
+shapely
+psycopg2-binary
+SQLAlchemy>=2.0
+geoalchemy2
+python-dotenv
+ortools==9.10.4067
+pulp

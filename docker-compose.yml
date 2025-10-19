@@ -1,0 +1,85 @@
+services:
+  # ---------------------- #
+  #  🗺️  PostGIS Database  #
+  # ---------------------- #
+  db:
+    image: postgis/postgis:16-3.4
+    platform: linux/amd64
+    environment:
+      POSTGRES_USER: geo
+      POSTGRES_PASSWORD: geo
+      POSTGRES_DB: geodb
+    ports:
+      - "5432:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./db-init.sql:/docker-entrypoint-initdb.d/db-init.sql:ro
+
+  # ---------------------- #
+  #  ⚙️  Python API Layer  #
+  # ---------------------- #
+  api:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://geo:geo@db:5432/geodb
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+
+  # ---------------------- #
+  #  💾  PgAdmin UI       #
+  # ---------------------- #
+  pgadmin:
+    image: dpage/pgadmin4:9.8
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+  # ---------------------- #
+  #  🗺️  OSM Importer     #
+  # ---------------------- #
+  osm2pgsql:
+    build:
+      context: .
+      dockerfile: osm2pgsql.Dockerfile
+    volumes:
+      - ./data:/data   # place delhi-latest.osm.pbf here
+    depends_on:
+      - db
+    environment:
+      PGPASSWORD: geo
+
+  # ---------------------- #
+  #  🌐  Next.js Frontend  #
+  # ---------------------- #
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      - api
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  dbdata:
+  pgadmin-data:

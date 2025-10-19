@@ -1,0 +1,56 @@
+{
+  "compilerOptions": {
+    /* Core output settings */
+    "target": "ES2020",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "module": "esnext",
+    "moduleResolution": "node",
+    "jsx": "preserve",
+    /* TypeScript interoperability */
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    /* Strictness and performance */
+    "strict": false,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "incremental": true,
+    /* Path aliases (✅ clean imports like "@/components/...") */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "app/*"
+      ]
+    },
+    /* Plugin support for Next.js */
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    /* Global types */
+    "types": [
+      "leaflet",
+      "node"
+    ],
+    "allowJs": true
+  },
+  /* Included source files */
+  "include": [
+    "next-env.d.ts",
+    ".next/types/**/*.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    "app/types/**/*.d.ts"
+  ],
+  /* Excluded paths */
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

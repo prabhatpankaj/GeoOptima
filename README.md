@@ -1,17 +1,24 @@
+docker compose down -v --remove-orphans
+
 docker compose up -d db
 
+docker compose logs db
 
 Import OSM data
 
 Now your osm2pgsql command will work without errors:
 
-docker compose run --rm osm2pgsql \
-  -d geodb -U geo -H db -W \
-  --create --slim --latlong --hstore \
-  /data/delhi-latest.osm.pbf
+docker compose run osm2pgsql bash
 
-and enter password geo
+bash import_ncr.sh
 
+validate data in any database
 
-python -m app.db_init
-python -m app.train_model
+SELECT
+    COUNT(*) AS total_points,
+    COUNT(name) FILTER (WHERE name IS NOT NULL) AS named_places,
+    COUNT(DISTINCT place) AS unique_place_types
+FROM planet_osm_point;
+
+select * from planet_osm_point limit 10;
+

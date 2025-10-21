@@ -5,6 +5,7 @@ services:
   db:
     image: postgis/postgis:16-3.4
     platform: linux/amd64
+    container_name: geooptima-db
     environment:
       POSTGRES_USER: geo
       POSTGRES_PASSWORD: geo
@@ -14,6 +15,11 @@ services:
     volumes:
       - dbdata:/var/lib/postgresql/data
       - ./db-init.sql:/docker-entrypoint-initdb.d/db-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geo"]
+      interval: 5s
+      retries: 10
+      start_period: 10s
 
   # ---------------------- #
   #  ⚙️  Python API Layer  #
@@ -21,6 +27,7 @@ services:
   api:
     build:
       context: ./backend
+    container_name: geooptima-api
     environment:
       DATABASE_URL: postgresql+psycopg2://geo:geo@db:5432/geodb
       PYTHONUNBUFFERED: "1"
@@ -28,7 +35,8 @@ services:
       - ./backend:/app
     working_dir: /app
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     ports:
       - "8000:8000"
 
@@ -37,6 +45,7 @@ services:
   # ---------------------- #
   pgadmin:
     image: dpage/pgadmin4:9.8
+    container_name: geooptima-pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: admin
@@ -54,12 +63,16 @@ services:
     build:
       context: .
       dockerfile: osm2pgsql.Dockerfile
+    container_name: geooptima-osm-importer
     volumes:
-      - ./data:/data   # place delhi-latest.osm.pbf here
+      - ./data:/data
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       PGPASSWORD: geo
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sleep infinity"]
 
   # ---------------------- #
   #  🌐  Next.js Frontend  #
@@ -68,7 +81,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: frontend
+    container_name: geooptima-frontend
     ports:
       - "3000:3000"
     environment:

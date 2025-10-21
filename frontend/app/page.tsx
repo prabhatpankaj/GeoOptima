@@ -1,6 +1,5 @@
 "use client";
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import MarkerSidebar from "./components/MarkerSidebar";
 import SearchBar from "./components/SearchBar";
@@ -15,36 +14,60 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState<string>("Processing... please wait");
   const [lastRun, setLastRun] = useState<Date | null>(null);
-
+  const [cities, setCities] = useState<string[]>([]);
+  const [selectedCity, setSelectedCity] = useState<string>("delhi");
   const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number; name: string } | null>(null);
 
   // ---------------------------
-  // 🔹 Run Optimization Handler
+  // 🔹 Fetch available cities from backend
+  // ---------------------------
+  useEffect(() => {
+    const fetchCities = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/plan/cities");
+        const data = await res.json();
+        setCities(data.cities || []);
+      } catch (err) {
+        console.error("⚠️ Failed to fetch city list:", err);
+        setCities(["delhi"]); // fallback
+      }
+    };
+    fetchCities();
+  }, []);
+
+  // ---------------------------
+  // 🔹 Run Optimization
   // ---------------------------
   const handleRunOptimization = async () => {
     try {
       setLoading(true);
-      setLoadingText("Running Optimization... please wait");
+      setLoadingText(`Running optimization for ${selectedCity.toUpperCase()}...`);
       setInsights(null);
-      const data = await runOptimization({ max_time_min: 12, capacity: 150 });
+
+      // Run with city parameter
+      const data = await runOptimization(
+        { max_time_min: 12, capacity: 150 },
+        selectedCity
+      );
+
       setGeoData(data.geojson);
       setStats(data.stats);
       setLastRun(new Date());
     } catch (err) {
       console.error("❌ Optimization failed:", err);
-      alert("Optimization failed. Check backend or API connectivity.");
+      alert(`Optimization failed for ${selectedCity}. Check backend connectivity.`);
     } finally {
       setLoading(false);
     }
   };
 
   // ---------------------------
-  // 🔹 Fetch Insights Handler
+  // 🔹 Fetch Insights
   // ---------------------------
   const handleViewInsights = async () => {
     try {
       setLoading(true);
-      setLoadingText("Loading Insights... please wait");
+      setLoadingText(`Loading insights for ${selectedCity.toUpperCase()}...`);
       const data = await getInsights();
       setInsights(data);
     } catch (err) {
@@ -60,7 +83,7 @@ export default function Page() {
   // ---------------------------
   return (
     <div className="relative flex h-screen w-screen overflow-hidden">
-      {/* ✅ Full-Screen Overlay Loader (applies to entire app) */}
+      {/* ✅ Full-Screen Loader */}
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-800 bg-opacity-40 z-50">
           <div className="bg-white p-6 rounded-lg shadow-xl flex flex-col items-center justify-center space-y-3">
@@ -74,8 +97,33 @@ export default function Page() {
 
       {/* Sidebar */}
       <aside className="w-80 xl:w-96 p-4 border-r bg-white flex flex-col overflow-y-auto">
-        <h2 className="text-lg font-semibold mb-3">Darkstore Optimizer</h2>
+        <h2 className="text-lg font-semibold mb-3">GeoOptima Optimizer</h2>
+
+        {/* City Selector */}
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Select City
+        </label>
+        <select
+          value={selectedCity}
+          onChange={(e) => setSelectedCity(e.target.value)}
+          className="w-full mb-3 p-2 border rounded-md text-sm focus:ring focus:ring-green-200"
+          disabled={loading}
+        >
+          {cities.length > 0 ? (
+            cities.map((city) => (
+              <option key={city} value={city}>
+                {city.toUpperCase()}
+              </option>
+            ))
+          ) : (
+            <option value="delhi">DELHI (default)</option>
+          )}
+        </select>
+
+        {/* Search bar */}
         <SearchBar onSelect={(pt) => setSelectedLocation(pt)} />
+
+        {/* Buttons */}
         <button
           onClick={handleRunOptimization}
           disabled={loading}
@@ -85,7 +133,7 @@ export default function Page() {
               : "bg-green-600 hover:bg-green-700"
           }`}
         >
-          {loading ? "Running Optimization..." : "Run Optimization"}
+          {loading ? "Running Optimization..." : `Run for ${selectedCity.toUpperCase()}`}
         </button>
 
         <button
@@ -137,7 +185,6 @@ export default function Page() {
           <div className="mt-5 text-sm border-t pt-3">
             <h3 className="font-semibold mb-1">Insights</h3>
 
-            {/* Coverage */}
             <div>
               <strong>Coverage:</strong>
               <div className="ml-2 space-y-1">
@@ -156,7 +203,6 @@ export default function Page() {
               </div>
             </div>
 
-            {/* Clusters */}
             <div className="mt-3">
               <strong>Clusters:</strong>
               <ul className="ml-3 list-disc space-y-1">

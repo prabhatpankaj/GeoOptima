@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from app import optimizer_darkstores, data_osm, data_gen
 from app.utils_graph import to_geojson
 import pandas as pd
@@ -11,28 +11,30 @@ from sklearn.cluster import KMeans
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from concurrent.futures import ThreadPoolExecutor
+import os
+from sqlalchemy import text
+from app.db import get_engine, get_postgres_engine
 
 # ------------------------------------------------------------
 # App Setup
 # ------------------------------------------------------------
-app = FastAPI(title="GeoOptima API", version="1.4.0")
+app = FastAPI(title="GeoOptima API", version="1.6.0")
 
-# CORS setup (allow frontend on localhost)
+# ✅ CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict to ["http://localhost:3000"] for production
+    allow_origins=["*"],  # Restrict to known origins in prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ Add GZip compression after CORS
+# ✅ Add GZip compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Thread pool for heavy background tasks
 executor = ThreadPoolExecutor(max_workers=2)
 
 # ------------------------------------------------------------
@@ -99,11 +101,11 @@ def compute_coverage_stats():
         "max_travel_min": float(np.max(travel_times)),
     }
 
-
 # ------------------------------------------------------------
 # Request Model
 # ------------------------------------------------------------
 class PlanRequest(BaseModel):
+    city: str = "delhi"
     max_time_min: int = 10
     store_capacity: int = 200
     store_fixed_cost: float = 1.0
@@ -111,13 +113,37 @@ class PlanRequest(BaseModel):
     n_customers: int = 300
     use_postgis: bool = True
 
-
 # ------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------
+
+@app.get("/plan/cities")
+def list_available_cities():
+    """
+    Dynamically list all city databases available in PostGIS (geodb_*).
+    Example output: {"cities": ["delhi", "noida", "gurgaon", "faridabad", "ghaziabad"]}
+    """
+    engine = get_postgres_engine()
+
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("SELECT datname FROM pg_database WHERE datname LIKE 'geodb_%';")
+            ).fetchall()
+            cities = [r[0].replace("geodb_", "") for r in result]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to query cities: {e}")
+
+    if not cities:
+        cities = ["delhi"]
+
+    logger.info(f"🏙️ Available cities: {', '.join(cities)}")
+    return {"cities": sorted(cities)}
+
+
 @app.post("/generate")
 def generate(req: PlanRequest):
-    """Generate synthetic customers and dark store candidates."""
+    """Generate synthetic customers and darkstore candidates."""
     candidates, customers = data_gen.generate_candidates_and_customers(
         n_candidates=req.n_candidates,
         n_customers=req.n_customers,
@@ -136,33 +162,30 @@ def generate(req: PlanRequest):
 @app.post("/plan/network")
 def plan_network(req: PlanRequest):
     """
-    Run optimization using either PostGIS (real) or synthetic data.
-    Automatically falls back if PostGIS tables are missing.
+    Run optimization using PostGIS (real OSM) or synthetic fallback.
     """
     start_time = time.time()
-    source = "synthetic"
     plan = None
+    source = "synthetic"
 
     try:
         if req.use_postgis:
-            stores_df, customers_df = data_osm.extract_osm_points()
+            stores_df, customers_df = data_osm.extract_osm_points(city=req.city)
             optimizer_darkstores.STATE.update({
                 "candidates": stores_df.to_dict("records"),
                 "customers": customers_df.to_dict("records"),
             })
             plan = optimizer_darkstores.solve_darkstores(
-                candidates_df=stores_df,
-                customers_df=customers_df,
-                max_time_min=req.max_time_min,
-                store_capacity=req.store_capacity,
-                store_fixed_cost=req.store_fixed_cost,
-                use_postgis=True,
+                stores_df, customers_df, req.city,
+                req.max_time_min, req.store_capacity,
+                req.store_fixed_cost, True
             )
-            source = "osm"
+            source = f"osm:{req.city}"
     except Exception as e:
-        logger.warning(f"⚠️ PostGIS/OSM failed, using synthetic: {e}")
+        logger.warning(f"⚠️ PostGIS/OSM failed for {req.city}, using synthetic fallback: {e}")
 
     if plan is None:
+        # fallback synthetic generation
         candidates, customers = data_gen.generate_candidates_and_customers(
             n_candidates=req.n_candidates,
             n_customers=req.n_customers,
@@ -172,12 +195,8 @@ def plan_network(req: PlanRequest):
             "customers": customers,
         })
         plan = optimizer_darkstores.solve_darkstores(
-            candidates_df=None,
-            customers_df=None,
-            max_time_min=req.max_time_min,
-            store_capacity=req.store_capacity,
-            store_fixed_cost=req.store_fixed_cost,
-            use_postgis=False,
+            None, None, req.city, req.max_time_min, req.store_capacity,
+            req.store_fixed_cost, False
         )
 
     elapsed = round(time.time() - start_time, 2)
@@ -192,6 +211,7 @@ def plan_network(req: PlanRequest):
 
     return {
         "source": source,
+        "city": req.city,
         "stats": {**plan["stats"], **summary, "execution_time_sec": elapsed},
         "geojson": geojson,
         "assignments": plan["assignments"],
@@ -199,25 +219,31 @@ def plan_network(req: PlanRequest):
 
 
 @app.post("/plan/darkstores")
-def plan_darkstores(max_time_min: int = 10, capacity: int = 200, fixed_cost: float = 1.0):
-    """Direct PostGIS optimization (primary frontend endpoint)."""
+def plan_darkstores(
+    city: str = Query("delhi", description="City name (delhi, noida, gurgaon, faridabad, ghaziabad)"),
+    max_time_min: int = 10,
+    capacity: int = 200,
+    fixed_cost: float = 1.0
+):
+    """Run direct optimization from PostGIS data for the selected city."""
     start_time = time.time()
+
     try:
-        stores_df, customers_df = data_osm.extract_osm_points()
+        stores_df, customers_df = data_osm.extract_osm_points(city)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PostGIS data unavailable: {e}")
+        raise HTTPException(status_code=500, detail=f"PostGIS data unavailable for {city}: {e}")
 
     optimizer_darkstores.STATE.update({
         "candidates": stores_df.to_dict("records"),
         "customers": customers_df.to_dict("records"),
     })
 
-    # Run in background thread for better performance responsiveness
+    # Use async execution for CPU-bound optimization
     future = executor.submit(
         optimizer_darkstores.solve_darkstores,
-        stores_df, customers_df, max_time_min, capacity, fixed_cost, True
+        stores_df, customers_df, city, max_time_min, capacity, fixed_cost, True
     )
-    result = future.result(timeout=40)
+    result = future.result(timeout=120)
 
     plan_df = pd.DataFrame(result["stores"])
     summary = summarize_plan(plan_df)
@@ -230,13 +256,19 @@ def plan_darkstores(max_time_min: int = 10, capacity: int = 200, fixed_cost: flo
 
     result["stats"].update(summary)
     result["stats"]["execution_time_sec"] = elapsed
+    result["stats"]["city"] = city
 
-    return {"geojson": to_geojson(result["stores"]), "stats": result["stats"]}
+    logger.info(f"✅ Optimization complete for {city} ({elapsed}s)")
+    return {
+        "city": city,
+        "geojson": to_geojson(result["stores"]),
+        "stats": result["stats"],
+    }
 
 
 @app.get("/plan/insights")
 def plan_insights():
-    """Post-optimization analytics: coverage, clusters, and cost patterns."""
+    """Return post-optimization analytics: coverage, clusters, and cost patterns."""
     plan_data = optimizer_darkstores.STATE.get("plan_df")
     if not plan_data:
         raise HTTPException(status_code=404, detail="No plan found. Run /plan/darkstores first.")
@@ -252,7 +284,7 @@ def plan_insights():
 
 @app.get("/state")
 def get_state():
-    """Inspect the currently loaded dataset in memory."""
+    """Inspect current optimizer memory state."""
     state = optimizer_darkstores.STATE
     return {
         "candidates": len(state.get("candidates", [])),

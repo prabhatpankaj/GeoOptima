@@ -1,8 +1,13 @@
 // app/services/darkstoreService.ts
 
+/* ---------------------------------------------------
+ *  📦 Type Definitions
+ * --------------------------------------------------- */
+
 export interface OptimizationParams {
   max_time_min?: number;
   capacity?: number;
+  city?: string;
 }
 
 export interface OptimizationStats {
@@ -13,9 +18,11 @@ export interface OptimizationStats {
   avg_fixed_cost_open?: number;
   avg_fixed_cost_closed?: number;
   execution_time_sec?: number;
+  city?: string;
 }
 
 export interface OptimizationResponse {
+  city?: string;
   geojson: any;
   stats: OptimizationStats;
 }
@@ -43,22 +50,59 @@ export interface InsightsResponse {
   }[];
 }
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
+export interface CityInfo {
+  city: string;
+  osm_file: string;
+}
+
+export interface CityListResponse {
+  available_cities: CityInfo[];
+}
 
 /* ---------------------------------------------------
- *  🔹 Run Darkstore Optimization
+ *  🌍 API Base
+ * --------------------------------------------------- */
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
+
+/* ---------------------------------------------------
+ *  🏙️ Fetch Available Cities
+ * --------------------------------------------------- */
+export async function getCities(): Promise<CityListResponse> {
+  const url = `${API_BASE}/plan/cities`;
+
+  try {
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(`Backend error ${res.status}: ${msg}`);
+    }
+
+    return (await res.json()) as CityListResponse;
+  } catch (error) {
+    console.error("⚠️ Failed to fetch available cities:", error);
+    // Graceful fallback
+    return { available_cities: [{ city: "delhi", osm_file: "" }] };
+  }
+}
+
+/* ---------------------------------------------------
+ *  🚀 Run Darkstore Optimization (per city)
  * --------------------------------------------------- */
 export async function runOptimization(
-  params: OptimizationParams = { max_time_min: 12, capacity: 150 }
+  params: OptimizationParams = { max_time_min: 12, capacity: 150, city: "delhi" }
 ): Promise<OptimizationResponse> {
-  const url = `${API_BASE}/plan/darkstores`;
+  const city = params.city || "delhi";
+  const url = `${API_BASE}/plan/darkstores?city=${encodeURIComponent(city)}`;
 
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
+      body: JSON.stringify({
+        max_time_min: params.max_time_min,
+        capacity: params.capacity,
+      }),
     });
 
     if (!res.ok) {
@@ -66,27 +110,27 @@ export async function runOptimization(
       throw new Error(`Backend error ${res.status}: ${msg}`);
     }
 
-    return (await res.json()) as OptimizationResponse;
+    const data = (await res.json()) as OptimizationResponse;
+    return { ...data, city };
   } catch (error) {
-    console.error("❌ Failed to call Darkstore API:", error);
+    console.error(`❌ Failed to call Darkstore API for city=${city}:`, error);
     throw error;
   }
 }
 
 /**
- * Alias for naming consistency with older code
+ * ✅ Alias for backward compatibility
  */
 export const runDarkstoreOptimization = runOptimization;
 
 /* ---------------------------------------------------
- *  🔹 Fetch Insights after Optimization
+ *  📊 Fetch Insights After Optimization
  * --------------------------------------------------- */
 export async function getInsights(): Promise<InsightsResponse> {
   const url = `${API_BASE}/plan/insights`;
 
   try {
     const res = await fetch(url, { method: "GET" });
-
     if (!res.ok) {
       const msg = await res.text();
       throw new Error(`Backend error ${res.status}: ${msg}`);
@@ -96,5 +140,19 @@ export async function getInsights(): Promise<InsightsResponse> {
   } catch (error) {
     console.error("❌ Failed to fetch Insights:", error);
     throw error;
+  }
+}
+
+/* ---------------------------------------------------
+ *  🧠 Utility: Reset/Reload (optional)
+ * --------------------------------------------------- */
+export async function resetState(): Promise<void> {
+  const url = `${API_BASE}/state/reset`;
+
+  try {
+    await fetch(url, { method: "POST" });
+    console.info("✅ Backend STATE cleared.");
+  } catch (error) {
+    console.warn("⚠️ Failed to reset backend state:", error);
   }
 }
